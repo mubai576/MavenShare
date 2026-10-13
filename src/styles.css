@@ -1,0 +1,34 @@
+:root { font-family: "Microsoft YaHei", system-ui, sans-serif; color: #1f2937; background: #f3f4f6; }
+* { box-sizing: border-box; }
+body { margin: 0; }
+.container { max-width: 960px; margin: 0 auto; padding: 20px; }
+header h1 { margin: 0; }
+.sub { color: #6b7280; margin: 4px 0 8px; }
+.badge { display: inline-block; background: #e5e7eb; border-radius: 999px; padding: 4px 12px; font-size: 13px; }
+.badge.ok { background: #dcfce7; }
+.badge.warn { background: #fef3c7; }
+.card { background: #fff; border-radius: 12px; padding: 16px; margin: 14px 0; box-shadow: 0 1px 4px rgba(0,0,0,.08); }
+.card h2 { margin: 0 0 10px; font-size: 17px; }
+.row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin: 8px 0; }
+.grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin: 10px 0; }
+label { display: flex; flex-direction: column; gap: 4px; font-size: 14px; }
+input, select { padding: 9px 10px; border: 1px solid #d1d5db; border-radius: 8px; font-size: 14px; }
+button { padding: 9px 14px; border-radius: 8px; border: 1px solid #d1d5db; background: #f9fafb; cursor: pointer; font-size: 14px; }
+button.primary { background: #2563eb; color: #fff; border-color: #2563eb; }
+button:disabled { opacity: .5; cursor: not-allowed; }
+.check { flex-direction: row; align-items: center; gap: 8px; }
+.muted { color: #6b7280; font-size: 13px; }
+.dropzone { border: 2px dashed #9ca3af; border-radius: 10px; padding: 18px; text-align: center; color: #6b7280; margin: 8px 0; }
+.dropzone.over { border-color: #2563eb; color: #2563eb; background: #eff6ff; }
+.log { background: #111827; color: #e5e7eb; border-radius: 8px; padding: 12px; min-height: 120px; max-height: 300px; overflow: auto; white-space: pre-wrap; font-size: 13px; }
+.list { display: flex; flex-direction: column; gap: 8px; }
+.item { border: 1px solid #e5e7eb; border-radius: 8px; padding: 8px 10px; font-size: 13px; background: #f9fafb; }
+.item b { color: #111827; }
+.guide { font-size: 14px; line-height: 1.7; }
+
+#gpg-card.missing { border: 2px solid #f59e0b; }
+
+.memory-row { align-items: flex-end; }
+.grow { flex: 1; min-width: 220px; }
+button.ghost { background: #fff; }
+#recent-files { width: 100%; text-overflow: ellipsis; }

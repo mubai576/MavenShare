@@ -1,0 +1,145 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="stylesheet" href="/src/styles.css" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>MavenShare - Maven 中央仓发布小工具</title>
+    <script type="module" src="/src/main.ts" defer></script>
+  </head>
+  <body>
+    <main class="container">
+      <header>
+        <h1>MavenShare</h1>
+        <p class="sub">把指定文件发布到 Maven 中央仓 · 成功后自动更新合集清单</p>
+        <div id="env-badge" class="badge">正在检测本机环境…</div>
+      </header>
+      <section class="card" id="gpg-card">
+        <h2>0 · GPG 安装与密钥（正式发布必需）</h2>
+        <div class="row">
+          <button id="btn-gpg-install" type="button" class="primary">一键安装 Gpg4win</button>
+          <button id="btn-gpg-page" type="button">打开官网下载页</button>
+          <button id="btn-gpg-recheck" type="button">重新检测</button>
+        </div>
+        <div class="muted">一键安装需要联网，通过系统 winget 静默安装；若弹出系统权限确认请点“是”。没有 winget 时请用官网下载页手动安装。</div>
+        <div class="grid">
+          <label>姓名（密钥标识）<input id="gpg-name" placeholder="如 Zhang San" /></label>
+          <label>邮箱（密钥标识）<input id="gpg-email" placeholder="如 you@example.com" /></label>
+          <label>口令（可留空）<input id="gpg-pass" type="password" placeholder="留空=无口令，签名更顺畅" /></label>
+        </div>
+        <div class="row">
+          <button id="btn-gpg-gen" type="button">生成密钥</button>
+          <button id="btn-gpg-keys" type="button">刷新密钥列表</button>
+          <button id="btn-gpg-publish" type="button">发布公钥到 Keyserver</button>
+        </div>
+        <div id="gpg-keys" class="list"></div>
+        <div class="muted">签名报 Invalid signature（找不到公钥）时点上面按钮发布公钥，全网同步要几分钟到几小时，同步完成前再发布仍会失败。</div>
+      </section>
+
+      <section class="card">
+        <h2>1 · 选择文件与填写坐标</h2>
+        <div class="row">
+          <button id="btn-pick" type="button">选择文件…</button>
+          <span id="file-label" class="muted">尚未选择文件（支持拖拽到虚线框）</span>
+        </div>
+        <div id="dropzone" class="dropzone">把文件拖到这里也可选中</div>
+        <div id="file-info" class="muted"></div>
+        <div class="row memory-row">
+          <label class="grow">最近文件（历史下拉）
+            <select id="recent-files"><option value="">— 选择最近文件 —</option></select>
+          </label>
+          <button id="btn-clear-memory" type="button" class="ghost">清空记忆</button>
+        </div>
+        <div class="muted">常用参数会自动记住，下次可直接下拉选择（Token 不会被记住）。</div>
+        <datalist id="dl-group-id"></datalist>
+        <datalist id="dl-artifact-id"></datalist>
+        <datalist id="dl-version"></datalist>
+        <datalist id="dl-classifier"></datalist>
+        <datalist id="dl-portal-user"></datalist>
+        
+        <div class="grid">
+          <label>groupId<input id="group-id" list="dl-group-id" placeholder="com.example" /></label>
+          <label>artifactId<input id="artifact-id" list="dl-artifact-id" placeholder="my-lib" /></label>
+          <label>version<input id="version" list="dl-version" placeholder="1.0.0" /></label>
+          <label>packaging
+            <select id="packaging">
+              <option value="jar" selected>jar</option>
+              <option value="zip">zip</option>
+              <option value="war">war</option>
+              <option value="pom">pom</option>
+              <option value="json">json</option>
+              <option value="xml">xml</option>
+              <option value="tar.gz">tar.gz</option>
+            </select>
+          </label>
+          <label>classifier（可选）<input id="classifier" list="dl-classifier" placeholder="如 sources / linux-x64，留空即无" /></label>
+          <label>Portal 用户名<input id="portal-user" list="dl-portal-user" placeholder="central.sonatype.com 的用户名" /></label>
+          <label>Portal Token<input id="portal-token" type="password" placeholder="User Token 的密码部分" /></label>
+        </div>
+        <div class="muted">中央仓必填：License / SCM / 开发者（会自动记住）</div>
+        <div class="grid">
+          <label>License
+            <select id="license-name">
+              <option value="MIT" selected>MIT License</option>
+              <option value="Apache-2.0">Apache License 2.0</option>
+              <option value="BSD-3-Clause">BSD 3-Clause</option>
+              <option value="GPL-3.0-only">GPL-3.0-only</option>
+              <option value="MPL-2.0">MPL-2.0</option>
+            </select>
+          </label>
+          <label>License 地址<input id="license-url" list="dl-license-url" placeholder="https://opensource.org/licenses/MIT" /></label>
+          <label>SCM 地址（仓库）<input id="scm-url" list="dl-scm-url" placeholder="https://github.com/xxx/yyy" /></label>
+          <label>开发者 ID<input id="dev-id" list="dl-dev-id" placeholder="如 mubai576，空=同姓名" /></label>
+          <label>开发者姓名<input id="dev-name" list="dl-dev-name" placeholder="如 Zhang San" /></label>
+          <label>开发者邮箱<input id="dev-email" list="dl-dev-email" placeholder="如 you@example.com" /></label>
+        </div>
+        <datalist id="dl-license-url"></datalist>
+        <datalist id="dl-scm-url"></datalist>
+        <datalist id="dl-dev-id"></datalist>
+        <datalist id="dl-dev-name"></datalist>
+        <datalist id="dl-dev-email"></datalist>
+        <label class="check"><input id="publish-catalog" type="checkbox" checked /> 发布成功后自动更新合集清单（share-catalog，版本自动递增）</label>
+        <div class="row">
+          <button id="btn-validate" type="button">校验坐标</button>
+          <button id="btn-dryrun" type="button">本地试打包（不上传）</button>
+          <button id="btn-publish" type="button" class="primary">发布到中央仓</button>
+          <button id="btn-check-token" type="button">测试凭证</button>
+          <button id="btn-save-token" type="button">保存 Token</button>
+        </div>
+      </section>
+
+      <section class="card">
+        <h2>2 · 运行日志</h2>
+        <pre id="log" class="log">等待操作…&#10;</pre>
+      </section>
+
+      <section class="card">
+        <h2>3 · 合集清单预览</h2>
+        <div class="row">
+          <button id="btn-catalog" type="button">刷新清单</button>
+          <span id="catalog-meta" class="muted"></span>
+        </div>
+        <div id="catalog-list" class="list"></div>
+      </section>
+
+      <section class="card">
+        <h2>4 · 本地历史</h2>
+        <div class="row">
+          <button id="btn-history" type="button">刷新历史</button>
+        </div>
+        <div id="history-list" class="list"></div>
+      </section>
+
+      <section class="card">
+        <h2>5 · 新手引导（首次必看）</h2>
+        <ol class="guide">
+          <li>到 central.sonatype.com 注册账号，并在 Namespace 页面验证你的域名，拿到可用的 groupId（如 com.example）。</li>
+          <li>在 Portal 右上角生成 User Token，把用户名与密码填到上方表单并点“保存 Token”。</li>
+          <li>安装 Gpg4win（官网 gpg4win.org），装完在下方“0 · GPG 安装与密钥”填写姓名邮箱并点“生成密钥”，密钥列表出现即代表就绪（一键安装失败时去官网 gpg4win.org 手动装）。</li>
+          <li>回到本工具：选文件 → 填 GAV → 点“校验坐标” → 点“本地试打包”确认 bundle 结构 → 点“发布到中央仓”。</li>
+          <li>发布成功后工具会自动追加合集清单并发布 share-catalog 新版本；在“合集清单预览”里可看到放了什么、何时放的；中央仓 release 版本不可覆盖，清单用递增版本号实现“覆盖最新版”体验。</li>
+        </ol>
+      </section>
+    </main>
+  </body>
+</html>

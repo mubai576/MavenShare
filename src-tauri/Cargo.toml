@@ -1,0 +1,36 @@
+[package]
+name = "mavenshare"
+version = "0.1.0"
+description = "MavenShare - 把任意指定文件发布到 Maven 中央仓的 Tauri 小工具"
+authors = ["mavenshare"]
+edition = "2021"
+
+[lib]
+name = "mavenshare_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+tauri-plugin-opener = "2"
+tauri-plugin-dialog = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+zip = "2"
+sha2 = "0.10"
+chrono = { version = "0.4", features = ["serde"] }
+base64 = "0.22"
+reqwest = { version = "0.12", features = ["json", "multipart"] }
+tokio = { version = "1", features = ["full"] }
+keyring = "3"
+md5 = "0.8.1"
+sha1 = "0.11.0"
+
+[profile.release]
+codegen-units = 1
+lto = true
+opt-level = 3
+panic = "abort"
+strip = true
