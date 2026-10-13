@@ -1,7 +1,22 @@
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+
+#[cfg(windows)]
+fn apply_no_window(cmd: &mut std::process::Command) {
+    use std::os::windows::process::CommandExt;
+    cmd.creation_flags(0x08000000);
+}
+
+#[cfg(not(windows))]
+fn apply_no_window(_cmd: &mut std::process::Command) {}
+
+// 所有子进程统一入口：Windows 下不弹黑窗口
+fn sys_cmd(bin: &str) -> std::process::Command {
+    let mut c = std::process::Command::new(bin);
+    apply_no_window(&mut c);
+    c
+}
 
 use base64::{engine::general_purpose::STANDARD as B64, Engine};
 use chrono::Utc;
@@ -394,7 +409,7 @@ pub fn sign_file(path: &Path) -> Result<PathBuf, String> {
     let target = path.to_string_lossy().to_string();
     let mut last_err = String::new();
     for bin in gpg_candidates() {
-        let out = Command::new(bin)
+        let out = sys_cmd(bin)
             .args(["--yes", "--armor", "--detach-sign", "--output", &asc_str, &target])
             .output();
         match out {
@@ -851,7 +866,19 @@ fn cmd_validate(group_id: String, artifact_id: String, version: String, license_
 }
 
 #[tauri::command]
-fn cmd_env(app: AppHandle) -> EnvInfo {
+async fn cmd_env(app: AppHandle) -> EnvInfo {
+    match tokio::task::spawn_blocking(move || cmd_env_blocking(app)).await {
+        Ok(r) => r,
+        Err(_) => EnvInfo {
+            gpg_available: false,
+            gpg_version: "后台检测任务中断，点“重新检测”再试".to_string(),
+            gpg_state: "timeout".to_string(),
+            app_data_dir: String::new(),
+        },
+    }
+}
+
+fn cmd_env_blocking(app: AppHandle) -> EnvInfo {
     let (available, ver) = match gpg_version() {
         Some(v) => (true, v),
         None => (false, "未检测到 gpg，请用下方“0 · GPG 安装与密钥”一键安装".to_string()),
@@ -860,7 +887,14 @@ fn cmd_env(app: AppHandle) -> EnvInfo {
 }
 
 #[tauri::command]
-fn cmd_file_info(file_path: String) -> Result<serde_json::Value, String> {
+async fn cmd_file_info(file_path: String) -> Result<serde_json::Value, String> {
+    match tokio::task::spawn_blocking(move || file_info_blocking(file_path)).await {
+        Ok(r) => r,
+        Err(e) => Err(format!("文件信息查询任务中断：{e}")),
+    }
+}
+
+fn file_info_blocking(file_path: String) -> Result<serde_json::Value, String> {
     let p = Path::new(&file_path);
     if !p.exists() {
         return Err("所选文件不存在，请重新选择。".to_string());
@@ -879,7 +913,14 @@ fn cmd_file_info(file_path: String) -> Result<serde_json::Value, String> {
 }
 
 #[tauri::command]
-fn cmd_dry_run(app: AppHandle, request: PublishRequest) -> Result<DryRunResult, String> {
+async fn cmd_dry_run(app: AppHandle, request: PublishRequest) -> Result<DryRunResult, String> {
+    match tokio::task::spawn_blocking(move || dry_run_blocking(app, request)).await {
+        Ok(r) => r,
+        Err(e) => Err(format!("试打包任务中断：{e}")),
+    }
+}
+
+fn dry_run_blocking(app: AppHandle, request: PublishRequest) -> Result<DryRunResult, String> {
     validate_gav(&request.group_id, &request.artifact_id, &request.version)?;
     let meta = validate_pom_meta(&request)?;
     let src = Path::new(&request.file_path);
@@ -931,10 +972,17 @@ async fn cmd_publish(app: AppHandle, request: PublishRequest) -> Result<PublishR
 
     let staging = work.join(format!("stage-{}-{}", request.artifact_id, chrono::Utc::now().timestamp_millis()));
     fs::create_dir_all(&staging).map_err(|e| format!("创建暂存失败：{e}"))?;
-    let staged = stage_one(&staging, &request.group_id, &request.artifact_id, &request.version, &packaging, &request.classifier, &_pub_meta, &src, false)?;
-    let bundle_path = work.join(format!("{}-{}-{}-bundle.zip", request.artifact_id, request.version, chrono::Utc::now().timestamp_millis()));
-    zip_staging(&staging, &bundle_path)?;
-    let _ = fs::remove_dir_all(&staging);
+    let req_pb = request.clone(); let src_pb = src.clone();
+    let (bundle_path, staged) = tokio::task::spawn_blocking(move || -> Result<(PathBuf, StagedArtifact), String> {
+        let meta_pb = validate_pom_meta(&req_pb)?;
+        let staged = stage_one(&staging, &req_pb.group_id, &req_pb.artifact_id, &req_pb.version, &packaging, &req_pb.classifier, &meta_pb, &src_pb, false)?;
+        let bundle_path = work.join(format!("{}-{}-{}-bundle.zip", req_pb.artifact_id, req_pb.version, chrono::Utc::now().timestamp_millis()));
+        zip_staging(&staging, &bundle_path)?;
+        let _ = fs::remove_dir_all(&staging);
+        Ok((bundle_path, staged))
+    })
+    .await
+    .map_err(|e| format!("打包任务中断：{e}"))??;
 
     let file_name_only: String = src.file_name().and_then(|s| s.to_str()).unwrap_or("").to_string();
     let deployment_id = portal_upload(&bundle_path, &portal_username, &portal_token).await?;
@@ -1144,7 +1192,7 @@ fn cmd_output_timeout(bin: &str, args: &[&str], secs: u64) -> Result<std::proces
     let bin = bin.to_string();
     let args: Vec<String> = args.iter().map(|s| s.to_string()).collect();
     run_timeout(secs, move || {
-        std::process::Command::new(&bin)
+        sys_cmd(&bin)
             .args(&args)
             .stdin(std::process::Stdio::null())
             .output()
@@ -1186,7 +1234,14 @@ fn gpg_bin_or_err() -> Result<String, String> {
 }
 
 #[tauri::command]
-fn cmd_gpg_keys() -> Result<Vec<GpgKeyInfo>, String> {
+async fn cmd_gpg_keys() -> Result<Vec<GpgKeyInfo>, String> {
+    match tokio::task::spawn_blocking(gpg_keys_blocking).await {
+        Ok(r) => r,
+        Err(e) => Err(format!("后台密钥查询任务中断：{e}")),
+    }
+}
+
+fn gpg_keys_blocking() -> Result<Vec<GpgKeyInfo>, String> {
     let bin = gpg_bin_or_err()?;
     let out = cmd_output_timeout(&bin, &["--list-secret-keys", "--with-colons", "--fingerprint"], 12)
         .map_err(|e| format!("查询密钥失败：{e}"))?;
@@ -1195,7 +1250,14 @@ fn cmd_gpg_keys() -> Result<Vec<GpgKeyInfo>, String> {
 }
 
 #[tauri::command]
-fn cmd_gpg_gen_key(name: String, email: String, passphrase: String) -> Result<String, String> {
+async fn cmd_gpg_gen_key(name: String, email: String, passphrase: String) -> Result<String, String> {
+    match tokio::task::spawn_blocking(move || gpg_gen_blocking(name, email, passphrase)).await {
+        Ok(r) => r,
+        Err(e) => Err(format!("生成密钥任务中断：{e}")),
+    }
+}
+
+fn gpg_gen_blocking(name: String, email: String, passphrase: String) -> Result<String, String> {
     let bin = gpg_bin_or_err()?;
     let name = name.trim();
     let email = email.trim();
@@ -1206,7 +1268,7 @@ fn cmd_gpg_gen_key(name: String, email: String, passphrase: String) -> Result<St
         return Err("请填写有效的邮箱地址，密钥标识需要它。".to_string());
     }
     let uid = format!("{name} <{email}>");
-    let out = Command::new(&bin)
+    let out = sys_cmd(&bin)
         .args(["--batch", "--pinentry-mode", "loopback", "--passphrase", &passphrase,
                "--quick-generate-key", &uid, "rsa3072", "sign", "never"])
         .output()
@@ -1216,7 +1278,7 @@ fn cmd_gpg_gen_key(name: String, email: String, passphrase: String) -> Result<St
         let snippet: String = err.chars().take(400).collect();
         return Err(format!("生成密钥失败：{snippet}"));
     }
-    let out2 = Command::new(&bin)
+    let out2 = sys_cmd(&bin)
         .args(["--list-keys", "--with-colons", email])
         .output()
         .map_err(|e| format!("密钥已生成，但查询指纹失败：{e}"))?;
@@ -1228,7 +1290,7 @@ fn cmd_gpg_gen_key(name: String, email: String, passphrase: String) -> Result<St
 #[tauri::command]
 async fn cmd_gpg_publish_key() -> Result<String, String> {
     let bin = gpg_bin_or_err()?;
-    let keys = cmd_gpg_keys()?;
+    let keys = gpg_keys_blocking()?;
     if keys.is_empty() {
         return Err("没有可发布的 GPG 密钥：请先在“0 · GPG”里生成密钥后再试。".to_string());
     }
@@ -1237,7 +1299,7 @@ async fn cmd_gpg_publish_key() -> Result<String, String> {
         let mut parts = Vec::new();
         for fp in &fps {
             for server in ["hkps://keyserver.ubuntu.com", "hkps://keys.openpgp.org"] {
-                let out = Command::new(&bin).args(["--keyserver", server, "--send-keys", fp]).output();
+                let out = sys_cmd(&bin).args(["--keyserver", server, "--send-keys", fp]).output();
                 match out {
                     Ok(o) if o.status.success() => parts.push(format!("{fp} -> {server} 成功")),
                     Ok(o) => {
@@ -1261,12 +1323,12 @@ async fn cmd_gpg_install() -> Result<String, String> {
     if let Some(v) = gpg_version() {
         return Ok(format!("已检测到 {v}，无需安装。"));
     }
-    let has_winget = Command::new("winget").arg("--version").output().map(|o| o.status.success()).unwrap_or(false);
+    let has_winget = cmd_output_timeout("winget", &["--version"], 8).map(|o| o.status.success()).unwrap_or(false);
     if !has_winget {
         return Err("本机没有 winget（需 Win10 1709+ 自带的 App Installer），请点“打开官网下载页”去 gpg4win.org 手动下载安装。".to_string());
     }
     let output = tokio::task::spawn_blocking(|| {
-        Command::new("winget")
+        sys_cmd("winget")
             .args(["install", "--id", "GnuPG.Gpg4win", "-e", "--silent",
                    "--accept-package-agreements", "--accept-source-agreements"])
             .output()
