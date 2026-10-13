@@ -96,6 +96,7 @@ struct HistoryEntry {
 struct EnvInfo {
     gpg_available: bool,
     gpg_version: String,
+    gpg_state: String,
     app_data_dir: String,
 }
 
@@ -372,12 +373,13 @@ fn gpg_candidates() -> Vec<&'static str> {
 
 pub fn gpg_version() -> Option<String> {
     for bin in gpg_candidates() {
-        if let Ok(out) = Command::new(bin).arg("--version").output() {
-            if out.status.success() {
+        match cmd_output_timeout(bin, &["--version"], 6) {
+            Ok(out) if out.status.success() => {
                 let s = String::from_utf8_lossy(&out.stdout).to_string();
                 let first = s.lines().next().unwrap_or("gpg").to_string();
                 return Some(first);
             }
+            _ => continue,
         }
     }
     None
@@ -854,7 +856,7 @@ fn cmd_env(app: AppHandle) -> EnvInfo {
         Some(v) => (true, v),
         None => (false, "未检测到 gpg，请用下方“0 · GPG 安装与密钥”一键安装".to_string()),
     };
-    EnvInfo { gpg_available: available, gpg_version: ver, app_data_dir: app_dir(&app).to_string_lossy().to_string() }
+    EnvInfo { gpg_available: available, gpg_version: ver, gpg_state: if available { "ok".to_string() } else { gpg_timeout_state() }, app_data_dir: app_dir(&app).to_string_lossy().to_string() }
 }
 
 #[tauri::command]
@@ -1120,9 +1122,63 @@ fn parse_colon_keys(out: &str) -> Vec<GpgKeyInfo> {
     keys
 }
 
+static GPG_LAST_TIMEOUT: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+// 带超时的阻塞调用：超时后直接返回，后台线程等 gpg 自行退出（不占用调用方）
+fn run_timeout<T, F>(secs: u64, f: F) -> Result<T, String>
+where
+    T: Send + 'static,
+    F: FnOnce() -> T + Send + 'static,
+{
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let _ = tx.send(f());
+    });
+    rx.recv_timeout(std::time::Duration::from_secs(secs))
+        .map_err(|_| format!("操作超时（超过 {secs} 秒未返回）"))
+}
+
+// gpg 专用：stdin 直接断掉（防止卡在口令提示），超时时置标记供 cmd_env 区分“缺失”和“超时”
+fn cmd_output_timeout(bin: &str, args: &[&str], secs: u64) -> Result<std::process::Output, String> {
+    use std::sync::atomic::Ordering;
+    let bin = bin.to_string();
+    let args: Vec<String> = args.iter().map(|s| s.to_string()).collect();
+    run_timeout(secs, move || {
+        std::process::Command::new(&bin)
+            .args(&args)
+            .stdin(std::process::Stdio::null())
+            .output()
+            .map_err(|e| e.to_string())
+    })
+    .map(|inner| {
+        if inner.is_ok() {
+            GPG_LAST_TIMEOUT.store(false, Ordering::SeqCst);
+        }
+        inner
+    })
+    .map_err(|e| {
+        if e.contains("超时") {
+            GPG_LAST_TIMEOUT.store(true, Ordering::SeqCst);
+            format!("GPG 调用超时（{secs} 秒无响应，可能是首次初始化慢）")
+        } else {
+            e
+        }
+    })?
+    .map_err(|e| e)
+}
+
+fn gpg_timeout_state() -> String {
+    use std::sync::atomic::Ordering;
+    if GPG_LAST_TIMEOUT.load(Ordering::SeqCst) {
+        "timeout".to_string()
+    } else {
+        "missing".to_string()
+    }
+}
+
 fn gpg_bin_or_err() -> Result<String, String> {
     for bin in gpg_candidates() {
-        if Command::new(bin).arg("--version").output().map(|o| o.status.success()).unwrap_or(false) {
+        if cmd_output_timeout(bin, &["--version"], 3).map(|o| o.status.success()).unwrap_or(false) {
             return Ok(bin.to_string());
         }
     }
@@ -1132,9 +1188,7 @@ fn gpg_bin_or_err() -> Result<String, String> {
 #[tauri::command]
 fn cmd_gpg_keys() -> Result<Vec<GpgKeyInfo>, String> {
     let bin = gpg_bin_or_err()?;
-    let out = Command::new(&bin)
-        .args(["--list-secret-keys", "--with-colons", "--fingerprint"])
-        .output()
+    let out = cmd_output_timeout(&bin, &["--list-secret-keys", "--with-colons", "--fingerprint"], 12)
         .map_err(|e| format!("查询密钥失败：{e}"))?;
     let text = String::from_utf8_lossy(&out.stdout).to_string();
     Ok(parse_colon_keys(&text))
@@ -1438,6 +1492,16 @@ mod tests {
         assert!(interpret_check_status(400).is_ok());
         assert!(interpret_check_status(401).is_err());
         assert!(interpret_check_status(403).is_err());
+    }
+    #[test]
+    fn timeout_helper_fast_and_slow() {
+        assert_eq!(run_timeout(5, || 41 + 1).unwrap(), 42);
+        let err = run_timeout(1, || {
+            std::thread::sleep(std::time::Duration::from_secs(3));
+            1
+        })
+        .unwrap_err();
+        assert!(err.contains("超时"), "unexpected: {err}");
     }
     #[test]
     fn colon_keys_parse() {

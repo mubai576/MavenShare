@@ -223,6 +223,13 @@ async function refreshEnv() {
   try {
     const env = await invoke<any>("cmd_env");
     const badge = $("env-badge");
+    if (!env.gpg_available && (env as Record<string, unknown>).gpg_state === "timeout") {
+      badge.textContent = "GPG 检测超时（后台响应慢），已跳过，点“重新检测”再试";
+      badge.className = "badge warn";
+      markGpgCard(false);
+      log(`应用数据目录：${env.app_data_dir}`);
+      return;
+    }
     if (env.gpg_available) {
       badge.textContent = `本机环境正常 · ${env.gpg_version}`;
       badge.className = "badge ok";
@@ -519,8 +526,7 @@ window.addEventListener("DOMContentLoaded", () => {
       input(id).addEventListener("change", rememberCurrent);
     });
   } catch { /* memory UI optional */ }
-  refreshEnv();
-  refreshGpgKeys();
+  void (async () => { await refreshEnv(); await refreshGpgKeys(); })();
   loadConfig();
   refreshHistory();
 });

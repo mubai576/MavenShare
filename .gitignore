@@ -25,3 +25,4 @@ dist-ssr
 
 # portable green builds (distributed manually)
 MavenShare-*-green.zip
+MavenShare-0.1.0-win64-green/
